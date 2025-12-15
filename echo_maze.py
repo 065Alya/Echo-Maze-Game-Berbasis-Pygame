@@ -112,7 +112,7 @@ class Player(GameObject):
         # Variabel untuk menyimpan perubahan posisi (delta x, delta y)
         dx, dy = 0, 0  
 
-       # Mengecek tombol panah kiri - gerak ke kiri
+        # Mengecek tombol panah kiri - gerak ke kiri
         if keys[pygame.K_LEFT]:
             dx = -self.speed * dt    # Negatif = ke kiri (dikali dt agar smooth)
         
@@ -131,24 +131,52 @@ class Player(GameObject):
         # Menyimpan posisi lama (untuk rollback jika tabrakan)
         old_x, old_y = self.rect.x, self.rect.y
 
-        # Gerakan horizontal
-        self.rect.x += dx # Tambahkan perubahan posisi horizontal
-        # Cek apakah player menabrak dinding ATAU menabrak salah satu gate
-        if maze.is_wall(self.rect) or any(g.collide(self.rect) for g in gates):
-            self.rect.x = old_x # Kembalikan ke posisi lama (rollback)
-            self.handle_hit()   # Proses tabrakan (tambah hit counter + sound)
+        # === GERAKAN HORIZONTAL (kiri-kanan) ===
+        # Gerakkan player secara horizontal terlebih dahulu
+        self.rect.x += dx
+        
+        # Cek apakah setelah bergerak horizontal, player menabrak dinding
+        if maze.is_wall(self.rect):
+            # ROLLBACK: Kembalikan posisi horizontal ke posisi lama
+            self.rect.x = old_x
+            # Hitung hit (dengan cooldown untuk hindari double-hit)
+            self.handle_hit()
+        
+        # Cek apakah player menabrak gate yang sedang aktif
+        for gate in gates:
+            if gate.collide(self.rect):
+                # ROLLBACK: Kembalikan posisi horizontal ke posisi lama
+                self.rect.x = old_x
+                # Hitung hit (dengan cooldown)
+                self.handle_hit()
+                break  # Keluar dari loop, tidak perlu cek gate lainnya
 
-        # Gerakan vertikal
-        self.rect.y += dy    # Tambahkan perubahan posisi vertikal
-        # Cek tabrakan vertikal dengan dinding atau gate
-        if maze.is_wall(self.rect) or any(g.collide(self.rect) for g in gates):
-            self.rect.y = old_y          # Kembalikan ke posisi lama
-            self.handle_hit()            # Proses tabrakan
+        # === GERAKAN VERTIKAL (atas-bawah) ===
+        # Gerakkan player secara vertikal
+        self.rect.y += dy
+        
+        # Cek apakah setelah bergerak vertikal, player menabrak dinding
+        if maze.is_wall(self.rect):
+            # ROLLBACK: Kembalikan posisi vertikal ke posisi lama
+            self.rect.y = old_y
+            # Hitung hit (dengan cooldown)
+            self.handle_hit()
+        
+        # Cek apakah player menabrak gate yang sedang aktif
+        for gate in gates:
+            if gate.collide(self.rect):
+                # ROLLBACK: Kembalikan posisi vertikal ke posisi lama
+                self.rect.y = old_y
+                # Hitung hit (dengan cooldown)
+                self.handle_hit()
+                break  # Keluar dari loop
 
         # Sinkronisasi posisi GameObject dengan posisi rect
+        # Agar self.x dan self.y selalu sama dengan self.rect.x dan self.rect.y
         self.x, self.y = self.rect.x, self.rect.y
 
-    def handle_hit(self):  # Method untuk menangani tabrakan player dengan dinding/gate
+    def handle_hit(self):  
+        # Method untuk menangani tabrakan player dengan dinding/gate
         # Hit hanya dihitung jika cooldown sudah habis (untuk menghindari double-hit count)
         if self.hit_cooldown <= 0:
             hit_sound.play()            # Mainkan sound tabrakan
@@ -183,28 +211,67 @@ class Maze:
             "10000000001000000001",
             "10111111111001111001",
             "1000000000000011000E",
+            "11001111111001111001",
+            "11100011000001111111",
+            "11001110011110011111",
+            "11000000011111100111",
             "11111111111111111111",
         ]
 
     def is_wall(self, rect):
         # Method untuk mengecek apakah rect player menyentuh dinding
-        # Loop melalui semua pixel di dalam rectangle player
-        # Dari top ke bottom dengan langkah sebesar tile
-        for y in range(rect.top, rect.bottom, self.tile):
-           # Dari left ke right dengan langkah sebesar tile
-            for x in range(rect.left, rect.right, self.tile):
-                # Konversi koordinat pixel ke koordinat grid
-                r = y // self.tile      # Baris (row) dalam grid
-                c = x // self.tile      # kolom (coloumn) dalam grid
-                if self.grid[r][c] == '1':    # Cek apakah karakter di grid[r][c] adalah '1' (dinding)
-                    return True       # Ada tabrakan
-        return False # Tidak ada tabrakan
+        # Return: True jika menabrak dinding, False jika aman
+        
+        # Hitung batas-batas area yang perlu dicek
+        # Tambahkan +1 pada range untuk memastikan semua pixel tercakup
+        left = rect.left
+        right = rect.right
+        top = rect.top
+        bottom = rect.bottom
+        
+        # Loop melalui semua sudut dan tepi rectangle player
+        # Ini memastikan deteksi collision yang lebih akurat
+        check_points = [
+            (left, top),           # Sudut kiri atas
+            (right - 1, top),      # Sudut kanan atas
+            (left, bottom - 1),    # Sudut kiri bawah
+            (right - 1, bottom - 1), # Sudut kanan bawah
+            (left, rect.centery),  # Tengah kiri
+            (right - 1, rect.centery), # Tengah kanan
+            (rect.centerx, top),   # Tengah atas
+            (rect.centerx, bottom - 1) # Tengah bawah
+        ]
+        
+        # Cek setiap titik apakah ada yang menyentuh dinding
+        for x, y in check_points:
+            # Pastikan koordinat tidak keluar dari batas layar
+            if x < 0 or y < 0 or x >= WIDTH or y >= HEIGHT:
+                return True  # Dianggap dinding jika keluar batas
+            
+            # Konversi koordinat pixel ke koordinat grid
+            r = y // self.tile  # Baris (row) dalam grid
+            c = x // self.tile  # Kolom (column) dalam grid
+            
+            # Pastikan tidak keluar dari batas grid
+            if r >= len(self.grid) or c >= len(self.grid[0]):
+                return True
+            
+            # Cek apakah karakter di grid[r][c] adalah '1' (dinding)
+            if self.grid[r][c] == '1':
+                return True  # Ada tabrakan dengan dinding
+        
+        return False  # Tidak ada tabrakan
 
     def is_exit(self, rect):
         # Method untuk mengecek apakah player berada di pintu keluar
         r = rect.centery // self.tile       # Baris dari posisi tengah player
         c = rect.centerx // self.tile       # Kolom dari posisi tengah player
-        return self.grid[r][c] == 'E'       # Retrun True jika di pintu keluar atau diposisi 'E'
+        
+        # Pastikan tidak keluar dari batas grid
+        if r >= len(self.grid) or c >= len(self.grid[0]):
+            return False
+            
+        return self.grid[r][c] == 'E'       # Return True jika di pintu keluar atau diposisi 'E'
 
     def draw(self, screen, echo):
         # Method untuk menggambar dinding hanya jika terkena echo
@@ -412,15 +479,24 @@ class Game:
         # Buat font besar untuk pesan akhir
         font = pygame.font.Font("PixelOperatorSC-Bold.ttf", 50)
         
+        # Buat font kecil untuk instruksi
+        small_font = pygame.font.Font("PixelOperatorSC-Bold.ttf", 20)
+        
         # Tentukan warna teks: hijau jika menang, merah jika kalah
         text_color = GREEN if self.win else RED
         
         # Render teks dengan warna yang sesuai
         msg = font.render(text, True, text_color)
         
+        # Render instruksi untuk user
+        instruction = small_font.render("Press ESC to quit or wait 10 seconds", True, WHITE)
+        
         # Gambar teks di tengah layar
         # get_rect(center=(x, y)) untuk posisikan di tengah
-        screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
+        screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
+        
+        # Gambar instruksi di bawah pesan utama
+        screen.blit(instruction, instruction.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30)))
         
         # Update tampilan layar
         pygame.display.flip()
